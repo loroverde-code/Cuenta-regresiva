@@ -1,0 +1,176 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<title>Cuenta regresiva 3D avanzada</title>
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<style>
+:root{--bg1:#0f172a;--bg2:#071233;--a1:#7c3aed;--a2:#06b6d4;--glow:0 10px 30px rgba(124,58,237,.25)}
+html,body{margin:0;height:100%;font-family:Inter,system-ui}
+body{background:linear-gradient(135deg,var(--bg1),var(--bg2));display:flex;align-items:center;justify-content:center;color:#e6eef8}
+.panel{background:linear-gradient(180deg,rgba(255,255,255,.05),rgba(255,255,255,.02));border-radius:20px;padding:24px;width:100%;max-width:900px;box-shadow:var(--glow)}
+label{display:block;margin-top:10px;font-size:13px}
+input,select{background:transparent;color:white;border:1px solid rgba(255,255,255,.2);border-radius:10px;padding:6px}
+.row{display:flex;gap:6px;flex-wrap:wrap}
+button{margin-top:12px;width:100%;padding:12px;border:none;border-radius:14px;background:linear-gradient(90deg,var(--a1),var(--a2));color:white;font-weight:700}
+#app{display:none;perspective:1200px}
+.card{background:linear-gradient(135deg,rgba(255,255,255,.04),rgba(255,255,255,.02));border-radius:22px;padding:20px;box-shadow:var(--glow);animation:float 8s ease-in-out infinite}
+.no3d .card{animation:none}
+@keyframes float{0%{transform:rotateX(2deg) rotateY(-3deg)}50%{transform:rotateX(-2deg) rotateY(3deg) translateY(-10px)}100%{transform:rotateX(2deg) rotateY(-3deg)}}
+.countdown{display:flex;flex-wrap:wrap;gap:10px;margin-top:16px}
+.unit{background:rgba(255,255,255,.06);border-radius:14px;padding:10px;min-width:130px;text-align:center}
+.value{font-size:18px;font-weight:700}
+.label{font-size:12px;opacity:.8}
+.controls{display:flex;gap:8px;margin-top:16px}
+.controls button{width:50%}
+.settings{margin-top:14px;padding:12px;border-radius:14px;background:rgba(255,255,255,.05)}
+.settings-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:6px}
+</style>
+</head>
+<body>
+<div id="setup" class="panel">
+<h2>Configurar cuenta regresiva</h2>
+<label>Fecha y hora objetivo (12 horas)</label>
+<div class="row">
+<input type="date" id="dateInput">
+<input type="number" id="hourInput" min="1" max="12" value="12">
+<input type="number" id="minuteInput" min="0" max="59" value="0">
+<input type="number" id="secondInput" min="0" max="59" value="0">
+<input type="number" id="microInput" min="0" max="999" value="0">
+<select id="ampmInput"><option>AM</option><option>PM</option></select>
+</div>
+<label>Repetición automática</label>
+<select id="repeatMode">
+<option value="no">No</option>
+<option value="day">Cada día</option>
+<option value="week">Cada semana</option>
+<option value="month">Cada mes</option>
+<option value="year">Cada año</option>
+</select>
+<div class="settings">
+<strong>Unidades visibles</strong>
+<div class="settings-grid" id="unitToggles"></div>
+</div>
+<button id="startBtn">Iniciar</button>
+</div>
+<div id="app" class="panel">
+<div class="card">
+<h2>Cuenta regresiva</h2>
+<p id="lead"></p>
+<div class="countdown" id="countdown"></div>
+<div class="controls">
+<button id="soundBtn">🔊 Activar sonido</button>
+<button id="editBtn">✏️ Editar</button>
+</div>
+<div class="settings">
+<label><input type="checkbox" id="toggle3d" checked> Movimiento 3D</label>
+</div>
+<div class="settings">
+<strong>Unidades visibles</strong>
+<div class="settings-grid" id="unitTogglesLive"></div>
+</div>
+</div>
+</div>
+<script>
+const UNITS=[
+{k:'year',l:'Años',ms:31557600000},
+{k:'month',l:'Meses',ms:2629800000},
+{k:'week',l:'Semanas',ms:604800000},
+{k:'day',l:'Días',ms:86400000},
+{k:'hour',l:'Horas',ms:3600000},
+{k:'minute',l:'Minutos',ms:60000},
+{k:'second',l:'Segundos',ms:1000},
+{k:'millisecond',l:'Milisegundos',ms:1},
+{k:'microsecond',l:'Microsegundos',factor:1000},
+{k:'nanosecond',l:'Nanosegundos',factor:1000000},
+{k:'picosecond',l:'Picosegundos',factor:1000000000},
+{k:'femtosecond',l:'Femtosegundos',factor:1000000000000},
+{k:'attosecond',l:'Attosegundos',factor:1000000000000000}
+];
+const DEFAULT_VISIBLE=new Set(UNITS.slice(0,8).map(u=>u.k));
+let visible=new Set(DEFAULT_VISIBLE);
+const $=i=>document.getElementById(i);
+const setup=$('setup'),app=$('app'),lead=$('lead'),cd=$('countdown');
+const dateInput=$('dateInput'),hourInput=$('hourInput'),minuteInput=$('minuteInput'),
+secondInput=$('secondInput'),microInput=$('microInput'),ampmInput=$('ampmInput'),
+repeatMode=$('repeatMode');
+let targetMs=0,audioCtx=null,alarmPlayed=false,lastSec=null;
+function buildToggles(container){
+ container.innerHTML='';
+ UNITS.forEach(u=>{
+  const label=document.createElement('label');
+  label.innerHTML=`<input type="checkbox" ${visible.has(u.k)?'checked':''}> ${u.l}`;
+  label.querySelector('input').onchange=e=>{
+    if(e.target.checked) visible.add(u.k); else visible.delete(u.k);
+    renderUnits();
+  };
+  container.appendChild(label);
+ });
+}
+buildToggles($('unitToggles'));
+buildToggles($('unitTogglesLive'));
+function renderUnits(){
+ cd.innerHTML='';
+ UNITS.forEach(u=>{
+  if(!visible.has(u.k)) return;
+  const div=document.createElement('div');
+  div.className='unit';
+  div.innerHTML=`<div class="value" id="v_${u.k}">--</div><div class="label">${u.l}</div>`;
+  cd.appendChild(div);
+ });
+}
+renderUnits();
+function calcTarget(){
+ if(!dateInput.value) return;
+ const [y,m,d]=dateInput.value.split('-').map(Number);
+ let h=(+hourInput.value)%12;
+ if(ampmInput.value==='PM') h+=12;
+ const local=new Date(y,m-1,d,h,+minuteInput.value,+secondInput.value,+microInput.value);
+ targetMs=local.getTime();
+ lead.textContent=`Objetivo: ${local.toLocaleString()} — Repetición: ${repeatMode.value}`;
+}
+$('startBtn').onclick=()=>{calcTarget();setup.style.display='none';app.style.display='block';requestAnimationFrame(loop)};
+$('editBtn').onclick=()=>{app.style.display='none';setup.style.display='block'};
+$('toggle3d').onchange=e=>app.classList.toggle('no3d',!e.target.checked);
+$('soundBtn').onclick=()=>{audioCtx=new (window.AudioContext||webkitAudioContext)();audioCtx.resume();$('soundBtn').disabled=true};
+function beep(d=.15,f=1000){
+ if(!audioCtx) return;
+ const o=audioCtx.createOscillator(),g=audioCtx.createGain(),t=audioCtx.currentTime;
+ o.frequency.value=f;g.gain.setValueAtTime(.35,t);g.gain.exponentialRampToValueAtTime(.001,t+d);
+ o.connect(g);g.connect(audioCtx.destination);o.start(t);o.stop(t+d);
+}
+function longAlarm(){for(let i=0;i<8;i++)setTimeout(()=>beep(.4,600),i*450)}
+function addRepeat(){
+ const d=new Date(targetMs);
+ if(repeatMode.value==='day')d.setDate(d.getDate()+1);
+ if(repeatMode.value==='week')d.setDate(d.getDate()+7);
+ if(repeatMode.value==='month')d.setMonth(d.getMonth()+1);
+ if(repeatMode.value==='year')d.setFullYear(d.getFullYear()+1);
+ targetMs=d.getTime();alarmPlayed=false;
+}
+function loop(){
+ let diff=targetMs-Date.now();
+ if(diff<=0){
+  if(repeatMode.value==='no'&&!alarmPlayed){longAlarm();alarmPlayed=true}
+  if(repeatMode.value!=='no'){beep(.3,1500);addRepeat();diff=targetMs-Date.now()}
+ }
+ let remainder=diff;
+ UNITS.forEach(u=>{
+  if(!visible.has(u.k)) return;
+  let v=0;
+  if(u.ms){
+    v=Math.floor(remainder/u.ms);
+    remainder%=u.ms;
+  }else{
+    v=Math.floor(diff*u.factor);
+  }
+  const el=document.getElementById('v_'+u.k);
+  if(el) el.textContent=Math.max(0,v);
+ });
+ const sec=Math.floor(diff/1000)%60;
+ if(lastSec!==sec&&audioCtx){beep(.05,800);lastSec=sec}
+ requestAnimationFrame(loop);
+}
+</script>
+</body>
+</html>
